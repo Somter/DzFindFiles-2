@@ -35,7 +35,7 @@ namespace DzFindFiles_2
             {
                 string filesType = "";
                 string disk = "";
-                bool searchInSubDirs = false;
+                bool searchInSubDirs = false; 
                 string phrase = "";
 
                 Dispatcher.Invoke(() =>

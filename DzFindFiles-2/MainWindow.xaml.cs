@@ -11,31 +11,29 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace DzFindFiles_2
 {
-    /// <summary>
-    /// Interaction logic for MainWindow.xaml
-    /// </summary>
     public partial class MainWindow : Window
     {
-        private Thread searchThread;
-        private ManualResetEvent stopEvent = new ManualResetEvent(false);
-       
+        private CancellationTokenSource cancellationTokenSource;
+
         public MainWindow()
         {
             InitializeComponent();
             LoadDrives();
-            buttonStop.IsEnabled = false; 
+            buttonStop.IsEnabled = false;
         }
 
-        private void FindFile()
+        private void FindFile(CancellationToken token)
         {
             try
             {
                 string filesType = "";
                 string disk = "";
-                bool searchInSubDirs = false; 
+                bool searchInSubDirs = false;
                 string phrase = "";
 
                 Dispatcher.Invoke(() =>
@@ -43,35 +41,33 @@ namespace DzFindFiles_2
                     filesType = textBoxMask.Text;
                     disk = comboBoxDrives.Text;
                     searchInSubDirs = checkBoxSubDirs.IsChecked == true;
-                    phrase = textBoxPhrase.Text;  
+                    phrase = textBoxPhrase.Text;
                 });
 
                 string searchPath = disk + "\\";
                 if (!Directory.Exists(searchPath))
                 {
                     MessageBox.Show("Указанный диск или каталог не существует.");
-                    Dispatcher.Invoke(() => buttonStop.IsEnabled = false); 
+                    Dispatcher.Invoke(() => buttonStop.IsEnabled = false);
                     return;
                 }
 
                 System.IO.SearchOption searchOption = searchInSubDirs ? System.IO.SearchOption.AllDirectories : System.IO.SearchOption.TopDirectoryOnly;
-
                 Dispatcher.Invoke(() => listViewResults.Items.Clear());
 
-                stopEvent.Reset(); 
                 if (!string.IsNullOrEmpty(phrase))
                 {
-                    SearchFilesWithPhrase(searchPath, filesType, searchOption, phrase);
+                    SearchFilesWithPhrase(searchPath, filesType, searchOption, phrase, token);
                 }
                 else
                 {
-                    SearchFilesSafe(searchPath, filesType, searchOption);
+                    SearchFilesSafe(searchPath, filesType, searchOption, token);
                 }
 
                 Dispatcher.Invoke(() =>
                 {
-                    buttonStop.IsEnabled = false; 
-                    buttonStop.Content = "Остановить"; 
+                    buttonStop.IsEnabled = false;
+                    buttonStop.Content = "Остановить";
                 });
             }
             catch (Exception ex)
@@ -80,13 +76,13 @@ namespace DzFindFiles_2
             }
         }
 
-        private void SearchFilesWithPhrase(string searchPath, string searchPattern, System.IO.SearchOption searchOption, string phrase)
+        private void SearchFilesWithPhrase(string searchPath, string searchPattern, System.IO.SearchOption searchOption, string phrase, CancellationToken token)
         {
             try
             {
                 foreach (string filePath in Directory.GetFiles(searchPath, searchPattern))
                 {
-                    if (stopEvent.WaitOne(0)) return; 
+                    if (token.IsCancellationRequested) return;
 
                     try
                     {
@@ -97,7 +93,7 @@ namespace DzFindFiles_2
                             if (fileContent.Contains(phrase))
                             {
                                 FileInfo file = new FileInfo(filePath);
-                                FileInfoModel fileInfoModel = new FileInfoModel(
+                                var fileInfoModel = new FileInfoModel(
                                     file.Name,
                                     file.DirectoryName,
                                     file.Length.ToString(),
@@ -112,50 +108,35 @@ namespace DzFindFiles_2
                             }
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        Dispatcher.Invoke(() => MessageBox.Show("Ошибка при чтении файла: " + ex.Message));
-                    }
+                    catch { }
                 }
 
                 if (searchOption == System.IO.SearchOption.AllDirectories)
                 {
                     foreach (string dir in Directory.GetDirectories(searchPath))
                     {
-                        if (stopEvent.WaitOne(0)) return; 
-
+                        if (token.IsCancellationRequested) return;
                         try
                         {
-                            SearchFilesWithPhrase(dir, searchPattern, searchOption, phrase);
+                            SearchFilesWithPhrase(dir, searchPattern, searchOption, phrase, token);
                         }
-                        catch (UnauthorizedAccessException)
-                        {
-                            // Игнорируем защищенные папки
-                        }
+                        catch (UnauthorizedAccessException) { }
                     }
                 }
             }
-            catch (UnauthorizedAccessException)
-            {
-                // Пропускаем папки без доступа
-            }
-            catch (Exception ex)
-            {
-                Dispatcher.Invoke(() => MessageBox.Show("Ошибка при поиске: " + ex.Message));
-            }
+            catch (UnauthorizedAccessException) { }
         }
 
-
-        void SearchFilesSafe(string searchPath, string searchPattern, System.IO.SearchOption searchOption)
+        private void SearchFilesSafe(string searchPath, string searchPattern, System.IO.SearchOption searchOption, CancellationToken token)
         {
             try
             {
                 foreach (string filePath in Directory.GetFiles(searchPath, searchPattern))
                 {
-                    if (stopEvent.WaitOne(0)) return; 
+                    if (token.IsCancellationRequested) return;
 
                     FileInfo file = new FileInfo(filePath);
-                    FileInfoModel fileInfoModel = new FileInfoModel(
+                    var fileInfoModel = new FileInfoModel(
                         file.Name,
                         file.DirectoryName,
                         file.Length.ToString(),
@@ -173,58 +154,37 @@ namespace DzFindFiles_2
                 {
                     foreach (string dir in Directory.GetDirectories(searchPath))
                     {
-                        if (stopEvent.WaitOne(0)) return; 
-
+                        if (token.IsCancellationRequested) return;
                         try
                         {
-                            SearchFilesSafe(dir, searchPattern, searchOption);
+                            SearchFilesSafe(dir, searchPattern, searchOption, token);
                         }
-                        catch (UnauthorizedAccessException)
-                        {
-                            // Игнорируем защищенные папки
-                        }
+                        catch (UnauthorizedAccessException) { }
                     }
                 }
             }
-            catch (UnauthorizedAccessException)
-            {
-                // Пропускаем папки без доступа
-            }
-            catch (Exception ex)
-            {
-                Dispatcher.Invoke(() => MessageBox.Show("Ошибка при поиске: " + ex.Message));
-            }
+            catch (UnauthorizedAccessException) { }
         }
-
 
         private void ButtonSearch_Click(object sender, RoutedEventArgs e)
         {
-            if (searchThread != null && searchThread.IsAlive)
-            {
-                stopEvent.Set(); 
-            }
+            cancellationTokenSource?.Cancel();
+            cancellationTokenSource = new CancellationTokenSource();
+            CancellationToken token = cancellationTokenSource.Token;
 
-            stopEvent.Reset(); 
-
-            searchThread = new Thread(FindFile);
-            searchThread.IsBackground = true;
-            searchThread.Start();
+            Task.Factory.StartNew(() => FindFile(token), token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
             buttonStop.IsEnabled = true;
-            buttonStop.Content = "Остановить"; 
+            buttonStop.Content = "Остановить";
         }
 
         private void ButtonStop_Click(object sender, RoutedEventArgs e)
         {
-            if (searchThread != null && searchThread.IsAlive)
-            {
-                stopEvent.Set(); 
-            }
-
+            cancellationTokenSource?.Cancel();
             Dispatcher.Invoke(() =>
             {
-                buttonStop.IsEnabled = false; 
-                buttonStop.Content = "Остановить"; 
+                buttonStop.IsEnabled = false;
+                buttonStop.Content = "Остановить";
             });
         }
 
@@ -232,8 +192,13 @@ namespace DzFindFiles_2
         {
             comboBoxDrives.Items.Clear();
 
-            if (Directory.Exists("C:\\")) comboBoxDrives.Items.Add("C:");
-            if (Directory.Exists("D:\\")) comboBoxDrives.Items.Add("D:");
+            foreach (var drive in DriveInfo.GetDrives())
+            {
+                if (drive.IsReady)
+                {
+                    comboBoxDrives.Items.Add(drive.Name);
+                }
+            }
 
             if (comboBoxDrives.Items.Count > 0)
                 comboBoxDrives.SelectedIndex = 0;
